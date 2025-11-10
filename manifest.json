@@ -1,0 +1,21 @@
+{
+  "name": "Flappy \u2014 Custom",
+  "short_name": "FlappyCustom",
+  "start_url": "/index.html",
+  "display": "standalone",
+  "background_color": "#70c5ce",
+  "theme_color": "#70c5ce",
+  "description": "Flappy clone with custom sprite and sounds (upload your own).",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

@@ -1,0 +1,604 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Flappy — custom sounds & sprite</title>
+<link rel="manifest" href="/manifest.json">
+<style>
+  html,body { height:100%; margin:0; background:#70c5ce; font-family:system-ui,Segoe UI,Roboto,Arial; -webkit-tap-highlight-color: transparent; }
+  .container { display:flex; gap:20px; padding:18px; }
+  .left { flex:1; display:flex; align-items:center; justify-content:center; }
+  canvas { background: linear-gradient(#70c5ce,#8ad7e7); border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,0.2); }
+  .panel { width:340px; background:rgba(255,255,255,0.95); padding:12px; border-radius:12px; box-shadow:0 6px 18px rgba(0,0,0,0.08); }
+  .panel h3 { margin:6px 0 8px; font-size:16px; }
+  .row { margin:8px 0; display:flex; gap:8px; align-items:center; }
+  .row input[type=file] { flex:1; }
+  .small { font-size:13px; color:#444; }
+  .controls { text-align:center; margin-top:8px; }
+  button { padding:8px 12px; border-radius:8px; border:0; cursor:pointer; background:#1f8b38; color:white; font-weight:700; }
+  .danger { background:#c23a3a; }
+  .muted { background:#666; }
+  label { font-size:13px; }
+  .preview { height:48px; display:flex; align-items:center; gap:8px; }
+  .preview img { max-height:48px; max-width:140px; border-radius:6px; border:1px solid #ddd; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="left">
+    <canvas id="game" width="480" height="640"></canvas>
+  </div>
+
+  <div class="panel">
+    <h3>Custom assets & controls</h3>
+
+    <div class="row">
+      <label class="small">Sprite PNG (horizontal frames):</label>
+    </div>
+    <div class="row">
+      <input id="spriteFile" type="file" accept="image/png,image/webp,image/*">
+    </div>
+    <div class="row small">
+      <label>Frames:</label>
+      <input id="spriteFrames" type="number" value="3" min="1" style="width:70px;">
+      <label>Scale:</label>
+      <input id="spriteScale" type="number" value="1.0" step="0.1" min="0.2" style="width:70px;">
+    </div>
+    <div class="row preview" id="spritePreviewRow">
+      <div id="spritePreviewText" class="small">No sprite loaded — default circle bird used.</div>
+    </div>
+
+    <hr>
+
+    <div class="row">
+      <label class="small">Background / moving sound (loops while alive):</label>
+    </div>
+    <div class="row">
+      <input id="bgAudioFile" type="file" accept="audio/*">
+    </div>
+    <div class="row small">
+      <label>BG Volume:</label>
+      <input id="bgVolume" type="range" min="0" max="1" step="0.01" value="0.6" style="flex:1;">
+    </div>
+
+    <hr>
+
+    <div class="row">
+      <label class="small">Death sound (plays once on death):</label>
+    </div>
+    <div class="row">
+      <input id="deathAudioFile" type="file" accept="audio/*">
+    </div>
+    <div class="row small">
+      <label>Death Volume:</label>
+      <input id="deathVolume" type="range" min="0" max="1" step="0.01" value="1.0" style="flex:1;">
+    </div>
+
+    <hr>
+
+    <div class="row">
+      <label class="small">Other options</label>
+    </div>
+    <div class="row small">
+      <label>Pipe speed:</label>
+      <input id="pipeSpeed" type="range" min="0.6" max="6" step="0.1" value="2.2" style="flex:1;">
+    </div>
+
+    <div class="controls">
+      <button id="resetAssets" class="muted">Reset Assets</button>
+      <button id="muteToggle" class="muted">Mute</button>
+      <div style="height:8px"></div>
+      <div class="small">Tap / Click / Space: flap and start</div>
+    </div>
+
+    <div style="height:10px"></div>
+    <div class="small">Notes: Upload a sprite sheet with frames laid out left-to-right. Audio will start after first user interaction due to browser rules.</div>
+  </div>
+</div>
+
+<script>
+/* --- Config --- */
+const CONFIG = {
+  canvasWidth: 480,
+  canvasHeight: 640,
+  gravity: 0.45,
+  flapStrength: -8.5,
+  pipeGap: 150,
+  pipeWidth: 70,
+  pipeSpacing: 230,
+  pipeSpeed: 2.2,
+  birdRadius: 16,
+  spawnBuffer: 30,
+  fpsCap: 60
+};
+
+/* --- Canvas --- */
+const canvas = document.getElementById('game');
+canvas.width = CONFIG.canvasWidth;
+canvas.height = CONFIG.canvasHeight;
+const ctx = canvas.getContext('2d');
+
+const hud = document.createElement('div');
+hud.style = "position:fixed;left:50%;transform:translateX(-50%);top:18px;color:white;font-weight:700;text-shadow:0 1px 0 rgba(0,0,0,.2)";
+document.body.appendChild(hud);
+
+/* --- State --- */
+let state = {
+  bird: { x: 110, y: canvas.height/2, vy: 0, angle: 0 },
+  pipes: [],
+  frame: 0,
+  score: 0,
+  best: localStorage.getItem('flappy_best') ? +localStorage.getItem('flappy_best') : 0,
+  running: false,
+  alive: true,
+  assets: {
+    sprite: null,
+    spriteFrames: 3,
+    spriteScale: 1.0,
+    bgAudio: null,
+    deathAudio: null,
+    muted: false
+  }
+};
+
+/* --- UI elements --- */
+const spriteFile = document.getElementById('spriteFile');
+const spriteFramesInput = document.getElementById('spriteFrames');
+const spriteScaleInput = document.getElementById('spriteScale');
+const spritePreviewRow = document.getElementById('spritePreviewRow');
+const spritePreviewText = document.getElementById('spritePreviewText');
+
+const bgAudioFile = document.getElementById('bgAudioFile');
+const bgVolume = document.getElementById('bgVolume');
+
+const deathAudioFile = document.getElementById('deathAudioFile');
+const deathVolume = document.getElementById('deathVolume');
+
+const pipeSpeedInput = document.getElementById('pipeSpeed');
+const resetAssetsBtn = document.getElementById('resetAssets');
+const muteToggle = document.getElementById('muteToggle');
+
+/* --- Helpers --- */
+function rand(min, max){ return Math.random() * (max - min) + min; }
+function rectsIntersect(r1, r2){
+  return !(r2.left > r1.right || r2.right < r1.left || r2.top > r1.bottom || r2.bottom < r1.top);
+}
+
+/* --- Audio handling helpers --- */
+function makeAudioFromFile(file, loop=false){
+  if(!file) return null;
+  const url = URL.createObjectURL(file);
+  const a = new Audio(url);
+  a.loop = !!loop;
+  a.preload = "auto";
+  a.addEventListener('ended', ()=>{ if(!a.loop) { /* ended */ }});
+  return a;
+}
+function setBgAudio(audioEl){
+  if(state.assets.bgAudio && state.assets.bgAudio !== audioEl){
+    try { state.assets.bgAudio.pause(); } catch(e){}
+  }
+  state.assets.bgAudio = audioEl;
+  if(audioEl){
+    audioEl.volume = parseFloat(bgVolume.value);
+    audioEl.loop = true;
+  }
+}
+function setDeathAudio(audioEl){
+  state.assets.deathAudio = audioEl;
+  if(audioEl){
+    audioEl.volume = parseFloat(deathVolume.value);
+    audioEl.loop = false;
+  }
+}
+function tryPlayBg(){
+  if(!state.assets.bgAudio || state.assets.muted) return;
+  if(state.running && state.alive){
+    state.assets.bgAudio.pause();
+    state.assets.bgAudio.currentTime = 0;
+    state.assets.bgAudio.play().catch(()=>{ /* blocked until user interacts */ });
+  } else {
+    state.assets.bgAudio.pause();
+  }
+}
+function playDeath(){
+  if(state.assets.deathAudio && !state.assets.muted){
+    try { state.assets.deathAudio.currentTime = 0; } catch(e){}
+    state.assets.deathAudio.play().catch(()=>{ /* blocked */ });
+  }
+}
+
+/* --- Sprite load --- */
+spriteFile.addEventListener('change', e=>{
+  const f = e.target.files[0];
+  if(!f) return;
+  const img = new Image();
+  const url = URL.createObjectURL(f);
+  img.onload = () => {
+    state.assets.sprite = img;
+    state.assets.spriteFrames = Math.max(1, parseInt(spriteFramesInput.value) || 1);
+    spritePreviewRow.innerHTML = '';
+    const imgEl = document.createElement('img');
+    imgEl.src = url;
+    spritePreviewRow.appendChild(imgEl);
+    URL.revokeObjectURL(url);
+  };
+  img.onerror = () => {
+    spritePreviewText.textContent = 'Could not load sprite image.';
+  };
+  img.src = url;
+});
+
+spriteFramesInput.addEventListener('input', e=>{
+  state.assets.spriteFrames = Math.max(1, parseInt(e.target.value) || 1);
+});
+spriteScaleInput.addEventListener('input', e=>{
+  state.assets.spriteScale = Math.max(0.2, parseFloat(e.target.value) || 1.0);
+});
+
+/* --- Audio file inputs --- */
+bgAudioFile.addEventListener('change', e=>{
+  const f = e.target.files[0];
+  setBgAudio(makeAudioFromFile(f, true));
+});
+bgVolume.addEventListener('input', e=>{
+  if(state.assets.bgAudio) state.assets.bgAudio.volume = parseFloat(e.target.value);
+});
+
+deathAudioFile.addEventListener('change', e=>{
+  const f = e.target.files[0];
+  setDeathAudio(makeAudioFromFile(f, false));
+});
+deathVolume.addEventListener('input', e=>{
+  if(state.assets.deathAudio) state.assets.deathAudio.volume = parseFloat(e.target.value);
+});
+
+/* --- Reset & mute --- */
+resetAssetsBtn.addEventListener('click', ()=>{
+  state.assets.sprite = null;
+  spriteFile.value = '';
+  spritePreviewRow.innerHTML = '';
+  spritePreviewRow.appendChild(spritePreviewText);
+  spriteFramesInput.value = 3;
+  spriteScaleInput.value = 1.0;
+
+  if(state.assets.bgAudio){ try{ state.assets.bgAudio.pause(); }catch(e){} }
+  if(state.assets.deathAudio){ try{ state.assets.deathAudio.pause(); }catch(e){} }
+  state.assets.bgAudio = null;
+  state.assets.deathAudio = null;
+  bgAudioFile.value = '';
+  deathAudioFile.value = '';
+});
+
+muteToggle.addEventListener('click', ()=>{
+  state.assets.muted = !state.assets.muted;
+  muteToggle.textContent = state.assets.muted ? 'Unmute' : 'Mute';
+  if(state.assets.bgAudio){
+    if(state.assets.muted) state.assets.bgAudio.pause();
+    else tryPlayBg();
+  }
+});
+
+/* --- Input handling (mouse/touch/keyboard) --- */
+function flap(){
+  if(!state.running){ startGame(); return; }
+  if(!state.alive) return;
+  state.bird.vy = CONFIG.flapStrength;
+}
+window.addEventListener('keydown', e => { if(e.code === 'Space') { e.preventDefault(); flap(); }});
+canvas.addEventListener('mousedown', e => flap());
+canvas.addEventListener('touchstart', e => { e.preventDefault(); flap(); }, {passive:false});
+
+/* --- Game lifecycle --- */
+function startGame(){
+  state.bird = { x: 110, y: canvas.height/2, vy: 0, angle: 0 };
+  state.pipes = [];
+  state.frame = 0;
+  state.score = 0;
+  state.running = true;
+  state.alive = true;
+  CONFIG.pipeSpeed = parseFloat(pipeSpeedInput.value) || CONFIG.pipeSpeed;
+
+  for(let i=1;i<=3;i++) spawnPipe(canvas.width + i * CONFIG.pipeSpacing);
+
+  tryPlayBg();
+}
+
+function spawnPipe(x){
+  const margin = 60;
+  const gapY = rand(margin + CONFIG.pipeGap/2, canvas.height - margin - CONFIG.pipeGap/2);
+  state.pipes.push({ x, gapY, passed: false });
+}
+
+/* --- Collision detection --- */
+function checkCollisions(){
+  const r = {
+    left: state.bird.x - CONFIG.birdRadius,
+    right: state.bird.x + CONFIG.birdRadius,
+    top: state.bird.y - CONFIG.birdRadius,
+    bottom: state.bird.y + CONFIG.birdRadius
+  };
+  if(r.top <= 0 || r.bottom >= canvas.height) return true;
+  for(const p of state.pipes){
+    const pipeLeft = p.x;
+    const pipeRight = p.x + CONFIG.pipeWidth;
+    const gapTop = p.gapY - CONFIG.pipeGap/2;
+    const gapBottom = p.gapY + CONFIG.pipeGap/2;
+    const topRect = { left: pipeLeft, right: pipeRight, top: 0, bottom: gapTop };
+    const bottomRect = { left: pipeLeft, right: pipeRight, top: gapBottom, bottom: canvas.height };
+    if(circleRectCollision(state.bird.x, state.bird.y, CONFIG.birdRadius, topRect) ||
+       circleRectCollision(state.bird.x, state.bird.y, CONFIG.birdRadius, bottomRect)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function circleRectCollision(cx, cy, r, rect){
+  const closestX = Math.max(rect.left, Math.min(cx, rect.right));
+  const closestY = Math.max(rect.top, Math.min(cy, rect.bottom));
+  const dx = cx - closestX;
+  const dy = cy - closestY;
+  return (dx*dx + dy*dy) <= r*r;
+}
+
+/* --- Update & Draw --- */
+function update(dt){
+  if(!state.running) return;
+  state.frame++;
+
+  state.bird.vy += CONFIG.gravity;
+  state.bird.y += state.bird.vy;
+  state.bird.angle = Math.max(-0.6, Math.min(1.0, state.bird.vy / 10));
+
+  for(const p of state.pipes){
+    p.x -= parseFloat(pipeSpeedInput.value) || CONFIG.pipeSpeed;
+    if(!p.passed && p.x + CONFIG.pipeWidth < state.bird.x){
+      p.passed = true;
+      state.score++;
+      if(state.score > state.best){ state.best = state.score; localStorage.setItem('flappy_best', state.best); }
+    }
+  }
+  state.pipes = state.pipes.filter(p => p.x + CONFIG.pipeWidth > -CONFIG.spawnBuffer);
+
+  const last = state.pipes[state.pipes.length - 1];
+  if(!last || (canvas.width - last.x) >= CONFIG.pipeSpacing){
+    spawnPipe(canvas.width + CONFIG.spawnBuffer);
+  }
+
+  if(state.alive && checkCollisions()){
+    state.alive = false;
+    state.bird.vy = -6;
+    if(state.assets.bgAudio){ state.assets.bgAudio.pause(); }
+    if(!state.assets.muted) playDeath();
+  }
+}
+
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  const groundHeight = 80;
+  ctx.fillStyle = '#6ec24a';
+  ctx.fillRect(0, canvas.height - groundHeight, canvas.width, groundHeight);
+
+  for(const p of state.pipes){
+    ctx.fillStyle = '#2ea44f';
+    const left = Math.round(p.x);
+    const gapTop = Math.round(p.gapY - CONFIG.pipeGap/2);
+    const gapBottom = Math.round(p.gapY + CONFIG.pipeGap/2);
+    ctx.fillRect(left, 0, CONFIG.pipeWidth, gapTop);
+    ctx.fillRect(left, gapBottom, CONFIG.pipeWidth, canvas.height - gapBottom - groundHeight);
+    ctx.fillStyle = '#1f8b38';
+    ctx.fillRect(left-6, gapTop - 12, CONFIG.pipeWidth+12, 12);
+    ctx.fillRect(left-6, gapBottom, CONFIG.pipeWidth+12, 12);
+  }
+
+  ctx.save();
+  ctx.translate(state.bird.x, state.bird.y);
+  ctx.rotate(state.bird.angle);
+
+  if(state.assets.sprite){
+    const img = state.assets.sprite;
+    const frames = Math.max(1, parseInt(spriteFramesInput.value) || 1);
+    const frameIndex = Math.floor((state.frame * 0.2) % frames);
+    const fw = Math.floor(img.width / frames);
+    const fh = img.height;
+    const scale = parseFloat(spriteScaleInput.value) || 1.0;
+    ctx.drawImage(img, frameIndex * fw, 0, fw, fh, -fw/2 * scale, -fh/2 * scale, fw * scale, fh * scale);
+  } else {
+    ctx.beginPath();
+    ctx.fillStyle = '#ffdd57';
+    ctx.arc(0,0, CONFIG.birdRadius, 0, Math.PI*2);
+    ctx.fill();
+    ctx.closePath();
+    const wingOffsetY = Math.sin(state.frame * 0.25) * 4;
+    ctx.fillStyle = '#f0b400';
+    ctx.fillRect(-4, 4 + wingOffsetY, 12, 6);
+    ctx.fillStyle = '#222';
+    ctx.beginPath();
+    ctx.arc(6, -3, 3, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+
+  hud.textContent = `Score: ${state.score}  •  Best: ${state.best}`;
+
+  if(!state.alive){
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle = 'white';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 28px system-ui, sans-serif';
+    ctx.fillText('Game Over', canvas.width/2, canvas.height/2 - 20);
+    ctx.font = '16px system-ui, sans-serif';
+    ctx.fillText(`Score: ${state.score}   Best: ${state.best}`, canvas.width/2, canvas.height/2 + 8);
+    ctx.font = '14px system-ui, sans-serif';
+    ctx.fillText('Click / Tap to restart', canvas.width/2, canvas.height/2 + 44);
+  } else if(!state.running){
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle = 'white';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 32px system-ui, sans-serif';
+    ctx.fillText('Flappy — Custom', canvas.width/2, canvas.height/2 - 10);
+    ctx.font = '14px system-ui, sans-serif';
+    ctx.fillText('Click / Tap or press Space to start', canvas.width/2, canvas.height/2 + 20);
+  }
+}
+
+/* --- Loop --- */
+let last = performance.now();
+let accumulator = 0;
+const timestep = 1000 / CONFIG.fpsCap;
+
+function loop(now){
+  const delta = Math.min(50, now - last);
+  last = now;
+  accumulator += delta;
+  while(accumulator >= timestep){
+    update(timestep / 1000);
+    accumulator -= timestep;
+  }
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+let userInteracted = false;
+function onFirstUserInteraction(){
+  if(userInteracted) return;
+  userInteracted = true;
+  if(state.assets.bgAudio) state.assets.bgAudio.volume = parseFloat(bgVolume.value);
+  if(state.assets.deathAudio) state.assets.deathAudio.volume = parseFloat(deathVolume.value);
+  window.removeEventListener('click', onFirstUserInteraction);
+  window.removeEventListener('keydown', onFirstUserInteraction);
+  window.removeEventListener('touchstart', onFirstUserInteraction);
+}
+window.addEventListener('click', onFirstUserInteraction);
+window.addEventListener('keydown', onFirstUserInteraction);
+window.addEventListener('touchstart', onFirstUserInteraction);
+
+canvas.addEventListener('mousedown', e => {
+  if(!state.alive) {
+    startGame();
+  }
+});
+canvas.addEventListener('touchstart', e => {
+  if(!state.alive) startGame();
+}, {passive:false});
+
+spritePreviewRow.appendChild(spritePreviewText);
+
+
+
+/* --- IndexedDB persistence for uploaded assets --- */
+const DB_NAME = 'flappy_assets_db';
+const DB_STORE = 'files';
+function openDb(){
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if(!db.objectStoreNames.contains(DB_STORE)){
+        db.createObjectStore(DB_STORE);
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function saveFileToDb(key, blob){
+  try{
+    const db = await openDb();
+    const tx = db.transaction(DB_STORE, 'readwrite');
+    tx.objectStore(DB_STORE).put(blob, key);
+    return tx.complete;
+  }catch(e){
+    console.warn('IDB save failed', e);
+  }
+}
+async function loadFileFromDb(key){
+  try{
+    const db = await openDb();
+    return new Promise((res, rej) => {
+      const tx = db.transaction(DB_STORE, 'readonly');
+      const req = tx.objectStore(DB_STORE).get(key);
+      req.onsuccess = () => res(req.result || null);
+      req.onerror = () => rej(req.error);
+    });
+  }catch(e){
+    console.warn('IDB load failed', e);
+    return null;
+  }
+}
+async function deleteFileFromDb(key){
+  try{
+    const db = await openDb();
+    const tx = db.transaction(DB_STORE, 'readwrite');
+    tx.objectStore(DB_STORE).delete(key);
+  }catch(e){}
+}
+
+/* Try load persisted assets on startup */
+(async function loadPersistedAssets(){
+  try{
+    // sprite
+    const s = await loadFileFromDb('sprite');
+    if(s){
+      const url = URL.createObjectURL(s);
+      const img = new Image();
+      img.onload = () => {
+        state.assets.sprite = img;
+        spritePreviewRow.innerHTML = '';
+        const imgEl = document.createElement('img'); imgEl.src = url;
+        spritePreviewRow.appendChild(imgEl);
+        URL.revokeObjectURL(url);
+      };
+      img.src = url;
+    } else {
+      // load bundled sample sprite if no stored one
+      const img = new Image();
+      img.onload = () => { state.assets.sprite = img; spritePreviewRow.innerHTML=''; const imgEl=document.createElement("img"); imgEl.src='sample_sprite.png'; spritePreviewRow.appendChild(imgEl); };
+      img.src = 'sample_sprite.png';
+    }
+    // bg audio
+    const b = await loadFileFromDb('bg');
+    if(b){
+      setBgAudio(makeAudioFromFile(b, true));
+    } else {
+      setBgAudio(new Audio('bg_loop.wav'));
+    }
+    // death audio
+    const d = await loadFileFromDb('death');
+    if(d){
+      setDeathAudio(makeAudioFromFile(d, false));
+    } else {
+      setDeathAudio(new Audio('death.wav'));
+    }
+  }catch(e){
+    console.warn('Could not load persisted assets', e);
+  }
+})();
+/* Hook: whenever user selects files, also persist them */
+spriteFile.addEventListener('change', async e=>{
+  const f = e.target.files[0]; if(!f) return;
+  const data = f;
+  await saveFileToDb('sprite', data);
+});
+bgAudioFile.addEventListener('change', async e=>{
+  const f = e.target.files[0]; if(!f) return;
+  await saveFileToDb('bg', f);
+});
+deathAudioFile.addEventListener('change', async e=>{
+  const f = e.target.files[0]; if(!f) return;
+  await saveFileToDb('death', f);
+});
+resetAssetsBtn.addEventListener('click', async ()=>{
+  await deleteFileFromDb('sprite'); await deleteFileFromDb('bg'); await deleteFileFromDb('death');
+});
+
+</script>
+</body>
+</html>
